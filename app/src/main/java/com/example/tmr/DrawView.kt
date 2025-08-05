@@ -4,7 +4,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.Button
 import androidx.compose.material3.Scaffold
@@ -21,6 +23,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import java.io.OutputStreamWriter
 
 // Logger class remains the same
@@ -62,6 +65,7 @@ class Logger {
 fun DrawView() {
     var paths by remember { mutableStateOf(listOf<PathWithColor>()) }
     var currentPath by remember { mutableStateOf<PathWithColor?>(null) }
+    // ★★★ 실시간 그리기를 위한 상태 트리거를 다시 추가합니다.
     var redrawTrigger by remember { mutableStateOf(false) }
     val logger = remember { Logger() }
     val context = LocalContext.current
@@ -85,19 +89,17 @@ fun DrawView() {
         }
     )
 
-    // This effect runs once to set the status bar icon colors to dark.
     val view = LocalView.current
     if (!view.isInEditMode) {
         LaunchedEffect(Unit) {
             val window = (view.context as Activity).window
-            // This tells the system that the status bar has a light background and icons should be dark.
             WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = true
         }
     }
 
     LaunchedEffect(logger.isLogging) {
         if (logger.isLogging) {
-            while (true) {
+            while (isActive) {
                 logger.log(writing = 0)
                 delay(50)
             }
@@ -149,25 +151,35 @@ fun DrawView() {
                     .fillMaxSize()
                     .weight(1f)
                     .pointerInput(Unit) {
-                        detectDragGestures(
-                            onDragStart = { offset ->
-                                currentPath = PathWithColor(Path().apply { moveTo(offset.x, offset.y) }, Color.Black)
-                                logger.log(writing = 1, x = offset.x, y = offset.y)
-                            },
-                            onDragEnd = {
-                                currentPath?.let { paths = paths + it }
-                                currentPath = null
+                        awaitEachGesture {
+                            val down = awaitFirstDown()
+                            val path = Path().apply {
+                                moveTo(down.position.x, down.position.y)
+                                lineTo(down.position.x, down.position.y)
                             }
-                        ) { change, _ ->
-                            change.consume()
-                            currentPath?.path?.lineTo(change.position.x, change.position.y)
-                            logger.log(writing = 1, x = change.position.x, y = change.position.y)
+                            currentPath = PathWithColor(path, Color.Black)
+                            logger.log(writing = 1, x = down.position.x, y = down.position.y)
+
+                            // ★★★ 첫 터치 지점을 그리도록 트리거
                             redrawTrigger = !redrawTrigger
+
+                            drag(down.id) { change ->
+                                currentPath?.path?.lineTo(change.position.x, change.position.y)
+                                logger.log(writing = 1, x = change.position.x, y = change.position.y)
+
+                                // ★★★ 드래그 중 매 순간 그리도록 트리거
+                                redrawTrigger = !redrawTrigger
+                            }
+
+                            currentPath?.let { paths = paths + it }
+                            currentPath = null
                         }
                     }
             ) {
                 Canvas(modifier = Modifier.fillMaxSize()) {
+                    // ★★★ 트리거를 읽어서 상태 변경을 감지하도록 합니다.
                     val trigger = redrawTrigger
+
                     paths.forEach { pathWithColor ->
                         drawPath(path = pathWithColor.path, color = pathWithColor.color, style = Stroke(width = 7f))
                     }
